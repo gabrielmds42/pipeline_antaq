@@ -8,16 +8,16 @@ import os
 import requests
 import zipfile
 import boto3
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 
-load_dontenv()
+# load_dontenv()
 
-EMAIL_ENVIO = os.getenv('EMAIL_ENVIO')
-ENDPOINT_URL = os.getenv('ENDPOINT_URL')
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-BUCKET_NAME = os.getenv('BUCKET_NAME')
+# EMAIL_ENVIO = os.getenv('EMAIL_ENVIO')
+# ENDPOINT_URL = os.getenv('ENDPOINT_URL')
+# AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+# AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+# BUCKET_NAME = os.getenv('BUCKET_NAME')
 
 def notify_failure(context):
     subject = f"DAG {context['dag'].dag_id} Falhou!"
@@ -26,7 +26,7 @@ def notify_failure(context):
     Data de execução: {context['execution_date']}
     Erro: {context['exception']}
     """
-    send_email(f"{EMAIL_ENVIO}", subject, body)
+    send_email("seu_email@email.com", subject, body)
 
 
 def download_and_extract(ano: int, **kwargs):
@@ -35,8 +35,8 @@ def download_and_extract(ano: int, **kwargs):
     download_dir = "/opt/airflow/dags/files"
     os.makedirs(download_dir, exist_ok=True)
 
-    s3_client = boto3.client('s3', endpoint_url=f'{ENDPOINT_URL}', aws_access_key_id=f'{AWS_ACCESS_KEY_ID}', aws_secret_access_key=f'AWS_SECRET_ACCESS_KEY')
-    bucket_name = f'{BUCKET_NAME}'
+    s3_client = boto3.client('s3', endpoint_url='http://minio:9000', aws_access_key_id='mds42', aws_secret_access_key='mds42@123')
+    bucket_name = f'fiec-data-lake'
 
     for arquivo in arquivos:
         url = f"{base_url}{arquivos}"
@@ -51,16 +51,16 @@ def download_and_extract(ano: int, **kwargs):
                 f.write(response.content)
             print(f"Download concluído: {file_path}")
         
-        with zipfile.Zipfile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-        print(f"Extração concluído para {arquivo}")
+            with zipfile.Zipfile(file_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            print(f"Extração concluído para {arquivo}")
 
-        for extracted_file in os.listdir(extract_dir):
-            file_key = f"bronze/{'atracacao' if 'Atracao' in arquivo else 'carga'}/{ano}/{extracted_file}"
-            s3_client.upload_file(os.path.join(extract_dir, extracted_file), bucket_name, file_key)
-            print(f"Arquivo enviado para S3: s3://{bucket_name}/{file_key}")
-    except request.execptions.ResquestException as e:
-        print(f"Erro as baixar {arquivo}: {e}")
+            for extracted_file in os.listdir(extract_dir):
+                file_key = f"bronze/{'atracacao' if 'Atracao' in arquivo else 'carga'}/{ano}/{extracted_file}"
+                s3_client.upload_file(os.path.join(extract_dir, extracted_file), bucket_name, file_key)
+                print(f"Arquivo enviado para S3: s3://{bucket_name}/{file_key}")
+        except request.execptions.ResquestException as e:
+            print(f"Erro as baixar {arquivo}: {e}")
 
 # Parâmetros padrão
 DEFAULT_YEARS = [2021, 2022, 2023]
@@ -101,14 +101,48 @@ def generate_tasks(dag):
 
         task_success = EmailOperator(
             task_id=f"email_sucesso_{ano}",
-            to=f"{EMAIL_ENVIO}",
+            to="seu_email@email.com",
             subject=f"DAG {dag.dag_id} foi executada com sucesso para o ano {ano}.",
             dag=dag,
         )
 
         start_task >> task_download
-        task_download >> process >> [task_process_atracao, task_process_carga]
-        [task_process_atracao, task_process_carga] >> load >> [task_load_atracao, task_load_carga]
+        task_download >> process >> [task_process_atracacao, task_process_carga]
+        [task_process_atracacao, task_process_carga] >> load >> [task_load_atracacao, task_load_carga]
         [task_load_atracacao, task_load_carga] >> task_success
 
-    
+default_args = {
+        "owner": "gabriel",
+        "depends_on_past": False,
+        "start_date": datetime(2024, 1, 1),
+        "retries": 1,
+        "retry_delay": timedelta(minutes=5),
+        "on_failure_callback": notify_failure,
+    }    
+
+dag = DAG(
+    "etl_antaq",
+    default_args=default_args,
+    description="DAG para baixar, extrair, processar, carregar e salvar dados da ANTAQ no S3 e PostgreSQL",
+    schedule_interval="@monthly",
+    catchup=False,
+    )
+
+start_task = PythonOperator(
+        task_id="start",
+        python_callable=lambda: print("Iniciando processo de download, processamento e ingestão"),
+        dag=dag,
+    )
+
+process = PythonOperator(
+    task_id="process",
+    python_callable=lambda: print("Process"),
+    dag=dag,
+    )
+
+load = PythonOperator(
+    task_id="load",
+    python_callable=lambda: print("Load"),
+    dag=dag,
+    )
+generate_tasks
